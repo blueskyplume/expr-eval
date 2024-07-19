@@ -19,9 +19,7 @@ impl Display for ExpError {
     }
 }
 
-
-
-#[derive(Debug,Copy,Clone)]
+#[derive(Debug, Clone, Copy)]
 enum Token {
     Number(i32),
     Plus,       // 加
@@ -33,9 +31,14 @@ enum Token {
     RightParen, // 右括号
 }
 
+const ASSOC_LEFT: i32 = 0;
+const ASSOC_RIGHT: i32 = 1;
+
 impl Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}" , 
+        write!(
+            f,
+            "{}",
             match self {
                 Token::Number(n) => n.to_string(),
                 Token::Plus => "+".to_string(),
@@ -45,16 +48,14 @@ impl Display for Token {
                 Token::Power => "^".to_string(),
                 Token::LeftParen => "(".to_string(),
                 Token::RightParen => ")".to_string(),
+
             }
         )
     }
 }
 
-const ASSOC_LEFT: i32 = 0;
-const ASSOC_RIGHT: i32 = 1;
-
 impl Token {
-    // 判断是否是运算符
+    // 判断是不是运算符
     fn is_oprator(&self) -> bool {
         match self {
             Token::Plus | Token::Minus | Token::Multiply | Token::Divide | Token::Power => true,
@@ -88,21 +89,26 @@ impl Token {
             Token::Multiply => Some(l * r),
             Token::Divide => Some(l / r),
             Token::Power => Some(l.pow(r as u32)),
-            _ => None,
+            _ => None, 
         }
-    } 
+    }
 }
 
+
+// 将一个算术表达式解析成连续的 Token
+// 并通过 Iterator 返回，也可以通过 Peekable 接口获取
 struct Tokenizer<'a> {
     tokens: Peekable<Chars<'a>>,
 }
 
 impl<'a> Tokenizer<'a> {
+
     fn new(expr: &'a str) -> Self {
         Self {
-            tokens: expr.chars().peekable()
+            tokens: expr.chars().peekable(),
         }
     }
+
 
     // 消除空白字符串
     fn consume_whitespace(&mut self) {
@@ -118,7 +124,6 @@ impl<'a> Tokenizer<'a> {
     // 扫描数字
     fn scan_number(&mut self) -> Option<Token> {
         let mut num = String::new();
-
         while let Some(&c) = self.tokens.peek() {
             if c.is_numeric() {
                 num.push(c);
@@ -133,6 +138,7 @@ impl<'a> Tokenizer<'a> {
             Err(_) => None,
         }
     }
+
 
     // 扫描运算符号
     fn scan_operator(&mut self) -> Option<Token> {
@@ -149,92 +155,99 @@ impl<'a> Tokenizer<'a> {
     }
 }
 
-
+// 实现 Iterator ，使 Tokenizer 可以在通过for循环遍历
 impl<'a> Iterator for Tokenizer<'a> {
     type Item = Token;
 
+
     fn next(&mut self) -> Option<Self::Item> {
-        
-        // 消除空白字符串
+        // 消除空格
         self.consume_whitespace();
-        // 解析当前token类型
+        // 解析当前位置的 Token类型
         match self.tokens.peek() {
             Some(c) if c.is_numeric() => self.scan_number(),
             Some(_) => self.scan_operator(),
-            None => None,
+            None => return None,
         }
-
     }
 }
 
 struct Expr<'a> {
-    iter: Peekable<Tokenizer<'a>>
+    iter: Peekable<Tokenizer<'a>>,
 }
 
 impl<'a> Expr<'a> {
-    fn new(src: &'a str) -> Self {
+    pub fn new(src: &'a str) -> Self {
         Self {
             iter: Tokenizer::new(src).peekable(),
         }
     }
 
+    // 计算表达式，获取结果
+    pub fn eval(&mut self) -> Result<i32> {
+        let result = self.compute_expr(1)?;
+        // 如果还有Token未进行处理，说明表达式存在错误
+        if self.iter.peek().is_some() {
+            return Err(ExpError::Parse("Unexpected end of expr".into()));
+        }
+        Ok(result)
+    }
+
     // 计算单个Token或者子表达式
     fn compute_atom(&mut self) -> Result<i32> {
         match self.iter.peek() {
+            // 如果是数字，直接返回
             Some(Token::Number(n)) => {
                 let val = *n;
                 self.iter.next();
                 return Ok(val);
             },
-            // 匹配左括号，递归计算括号内的表达式
+            // 如果是左括号的话，递归计算括号内的值
             Some(Token::LeftParen) => {
                 self.iter.next();
                 let result = self.compute_expr(1)?;
                 match self.iter.next() {
                     Some(Token::RightParen) => (),
-                    _ => {
-                        return Err(ExpError::Parse("Unexpected character".into()));
-                    }
+                    _ => return Err(ExpError::Parse("Unexpected character".into())),
                 }
                 return Ok(result);
-            }
+            },
             _ => {
-                return Err(ExpError::Parse("123".to_string()));
+                return Err(ExpError::Parse(
+                    "Expecting a number or left parenthsis".into(),
+                ))
             }
         }
     }
 
-    fn compute_expr(&mut self,min_prec: i32) -> Result<i32> {
-        // 计算第一个token
+    fn compute_expr(&mut self, min_prec: i32) -> Result<i32> {
+        // 计算第一个Token
         let mut atom_lhs = self.compute_atom()?;
-
+    
         loop {
             let cur_token = self.iter.peek();
-
             if cur_token.is_none() {
                 break;
             }
-
             let token = *cur_token.unwrap();
 
-            // token 此时一定是运算符
-            // token的优先级大于等于min_prec
+            // 1.Token 一定是运算符
+            // 2.Token 的优先级必须大于等于 min_prec
             if !token.is_oprator() || token.precedence() < min_prec {
                 break;
             }
 
             let mut next_prec = token.precedence();
-
             if token.assoc() == ASSOC_LEFT {
                 next_prec += 1;
             }
 
             self.iter.next();
 
-            // 递归计算右边表达式的值
+            // 递归计算右边的表达式
             let atom_rhs = self.compute_expr(next_prec)?;
 
-            // 得到两边表达式的值，进行计算
+            // 得到了两边的值，进行计算
             match token.compute(atom_lhs, atom_rhs) {
                 Some(res) => atom_lhs = res,
                 None => return Err(ExpError::Parse("Unexpected expr".into())),
@@ -243,24 +256,14 @@ impl<'a> Expr<'a> {
         }
 
         Ok(atom_lhs)
+
+    
     }
-
-    fn eval(&mut self) -> Result<i32> {
-        let result = self.compute_expr(1)?;
-
-        // 检查是否还有Token未进行处理，说明表达式错误
-        if self.iter.peek().is_some() {
-            return Err(ExpError::Parse("Unexpected end of expr".into()));
-        }
-
-        Ok(result)
-    }
-
 }
 
 fn main() {
-    let src = "10 * 2 ^ 2 + 5 + 20 / 4 + (1 + 1)";
+    let src = "92 + 5 ^ 5 * 27 - (92 - 12) / 4 + 26";
     let mut expr = Expr::new(src);
     let result = expr.eval();
-    println!("{:?}",result);
+    println!("res = {:?}", result);
 }
